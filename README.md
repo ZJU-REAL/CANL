@@ -13,9 +13,9 @@
 
 - [Overview](#-overview)
 - [Quick Start](#-quick-start)
-- [For Your Own Data](#-for-your-own-data)
-- [Reward Implementation](#-reward-implementation)
-- [Evaluation](#-evaluation)
+- [For Your Own Data](#for-your-own-data)
+- [Reward Implementation](#reward-implementation)
+- [Evaluation](#evaluation)
 - [Acknowledgement](#-acknowledgement)
 - [Citation](#-citation)
 
