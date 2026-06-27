@@ -1,0 +1,7 @@
+checkpoints/
+assets/
+old_ckpts/
+runs/
+
+detect_and_train.py
+Dockerfile
