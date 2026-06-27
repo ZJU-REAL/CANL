@@ -851,21 +851,19 @@ class VLMGRPOTrainer(Trainer):
         gt_rewards = gt_rewards_per_func.sum(dim=1)
 
         if self.downsample_fac != 1:
-            # 先获取要选择的样本的索引
             selected_idx = []
             selected_idx_global = []
             rank = dist.get_rank()
             n1 = len(prompts)
             n2 = n1//self.downsample_fac
-            # 给reward的可信度排序
+            # sort according to conf
             dis_index = [(dis, i) for i, dis in enumerate(dis_to_voting_point)]
             n = len(dis_index)
             dis_index.sort(key=lambda x: x[0])
             # print(f"rewards: {rewards}")
             # print(f"dis_index: {dis_index}")
-            # 获取当前process上对应的reward的可信度
+            # get conf in current gpu
             if self.negative_learning == True:
-                # 只选reward=-1，不够再用reward=0凑
                 positive_reward_idx = []
                 negative_reward_idx = []
                 for i, (_, idx) in enumerate(dis_index):
@@ -883,13 +881,11 @@ class VLMGRPOTrainer(Trainer):
                         del negative_reward_idx[0]
                     else:
                         break
-                # 用0补齐
                 while len(selected_idx) < n2:
                     selected_idx_global.append(positive_reward_idx[0][0])
                     selected_idx.append(positive_reward_idx[0][0] - rank*n1)
                     del positive_reward_idx[0]
             elif self.positive_learning == True:
-                # 只选reward=-1，不够再用reward=0凑
                 positive_reward_idx = []
                 negative_reward_idx = []
                 for i, (_, idx) in enumerate(dis_index):
@@ -904,7 +900,6 @@ class VLMGRPOTrainer(Trainer):
                     selected_idx_global.append(positive_reward_idx[0][0])
                     selected_idx.append(positive_reward_idx[0][0] - rank*n1)
                     del positive_reward_idx[0]
-                # 用1补齐
                 while len(selected_idx) < n2:
                     if negative_reward_idx:
                         selected_idx_global.append(negative_reward_idx[0][0])
@@ -914,10 +909,10 @@ class VLMGRPOTrainer(Trainer):
                         break
             else:
                 rewards_idx = [idx for _, idx in dis_index if rank*n1 <= idx < (rank + 1)*n1]
-                # 最优的强制选
+                # choose optimal
                 if dis_index[0][1] in rewards_idx:
                     selected_idx_global = [rewards_idx[0]] + random.sample(rewards_idx[1:], n2-1)    
-                # 剩下的随机
+                # random select
                 else:
                     selected_idx_global = random.sample(rewards_idx, n2)
                 selected_idx = [idx - rank*n1 for idx in selected_idx_global]
@@ -944,7 +939,7 @@ class VLMGRPOTrainer(Trainer):
             else:
                 multimodal_inputs['image_grid_thw'] = torch.index_select(multimodal_inputs['image_grid_thw'], dim=0, index=selected_idx_tensor)
             # var for log
-            # reward是全局的，需要先将所有设备上选择的索引合并
+            # get global reward from all gpus
             all_selected_idx_global_tensor = self.accelerator.gather(selected_idx_global_tensor)
             rewards_per_func = torch.index_select(rewards_per_func, dim=0, index=all_selected_idx_global_tensor)
             gt_rewards_per_func = torch.index_select(gt_rewards_per_func, dim=0, index=all_selected_idx_global_tensor)
@@ -954,7 +949,7 @@ class VLMGRPOTrainer(Trainer):
         mean_grouped_rewards = None
         std_grouped_rewards = None
 
-        # 下采样后归一化
+        # normalize after downsampling
         if self.normalize == 'later':
             # Compute grouped-wise rewards
             # Each group consists of num_generations completions for the same prompt
@@ -966,17 +961,17 @@ class VLMGRPOTrainer(Trainer):
             std_grouped_rewards = std_grouped_rewards.repeat_interleave(self.num_generations, dim=0)
 
             advantages = (rewards - mean_grouped_rewards) / (std_grouped_rewards + 1e-4)
-        # 下采样前归一化过了则要复原reward，后面日志中保存信息要用。
+        # recover reward for logging
         elif self.normalize == 'pre':
             advantages = rewards
-            # 全0
+            # all zero
             if torch.all(rewards == 0):
                 std_grouped_rewards = torch.tensor(0, device=rewards.device, dtype=rewards.dtype)
                 if correct_ratio == 1:
                     rewards = torch.full_like(rewards, self.positive_reward)
                 else:
                     rewards = torch.full_like(rewards, self.negative_reward)
-            # 不全0
+            # not all zero
             else:
                 rewards = torch.where(rewards > 0, torch.tensor(self.positive_reward, device=rewards.device), torch.tensor(self.negative_reward, device=rewards.device))
                 mean_grouped_rewards = rewards.view(-1, self.num_generations).mean(dim=1)
@@ -986,17 +981,17 @@ class VLMGRPOTrainer(Trainer):
                 std_grouped_rewards = std_grouped_rewards.repeat_interleave(self.num_generations, dim=0)
         else:
             advantages = rewards
-            # 全0
+            # all zero
             if torch.all(rewards == 0):
                 std_grouped_rewards = torch.tensor(0, device=rewards.device, dtype=rewards.dtype)
-            # 不全0
+            # not all zero
             else:
                 mean_grouped_rewards = rewards.view(-1, self.num_generations).mean(dim=1)
                 std_grouped_rewards = rewards.view(-1, self.num_generations).std(dim=1)
                 # Normalize the rewards to compute the advantages
                 mean_grouped_rewards = mean_grouped_rewards.repeat_interleave(self.num_generations, dim=0)
                 std_grouped_rewards = std_grouped_rewards.repeat_interleave(self.num_generations, dim=0)
-        # 负学习则正样本优势置0
+        
         if self.negative_learning == True:
             advantages = torch.where(advantages > 0, torch.tensor(0, device=advantages.device), advantages)
 
@@ -1057,7 +1052,7 @@ class VLMGRPOTrainer(Trainer):
             negative_accuracy = ((gt_rewards == -1) & (rewards == self.negative_reward)).sum().item()/negative_num if negative_num > 0 else 1.
             negative_accuracy_tensor = torch.tensor(negative_accuracy, device=rewards.device)
             self._metrics["reward_negative_accuracy"].append(self.accelerator.gather_for_metrics(negative_accuracy_tensor).mean().item())
-        # 主要关注precision, 应该要尽量少的把0预测为1
+        
         precision = tp / (tp + fp) if (tp + fp) > 0 else 0.0
         f1_score = 2*recall*precision/(precision + recall) if precision + recall > 0 else 0.
         recall_tensor = torch.tensor(recall, device=rewards.device)
