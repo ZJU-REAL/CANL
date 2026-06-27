@@ -2,6 +2,9 @@ checkpoints/
 assets/
 old_ckpts/
 runs/
-
+run_scripts/
+dataset/pro/parsed.jsonl
+dataset/membench-gui
+dataset/v2/omniparser_parsed.jsonl
 detect_and_train.py
 Dockerfile
